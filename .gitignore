@@ -1,0 +1,6 @@
+data/cats/
+data/dogs/
+data/test/
+__pycache__/
+*.pyc
+/tmp/
