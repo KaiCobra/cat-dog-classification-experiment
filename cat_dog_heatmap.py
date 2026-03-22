@@ -30,6 +30,7 @@ import matplotlib.colors as mcolors
 from pathlib import Path
 import random
 import warnings
+from sklearn.decomposition import PCA
 
 warnings.filterwarnings("ignore")
 
@@ -70,7 +71,7 @@ def load_dinov3_model(weights_path=None, device="cpu"):
     Returns:
         model: DINOv3 DinoVisionTransformer
     """
-    from dinov3.hub.backbones import dinov3_vits16
+    from dinov3.hub.backbones import dinov3_vitl16 as dinov3_vits16
 
     if weights_path and os.path.exists(weights_path):
         # Load with pretrained weights from local file
@@ -263,18 +264,18 @@ def main():
     parser.add_argument("--batch-size", type=int, default=16)
     args = parser.parse_args()
 
-    DATA_DIR = SCRIPT_DIR / "data"
+    DATA_DIR = SCRIPT_DIR / "1/training_set/training_set"
     CAT_DIR = DATA_DIR / "cats"
     DOG_DIR = DATA_DIR / "dogs"
-    TEST_DIR = DATA_DIR / "test"
-    OUTPUT_DIR = SCRIPT_DIR / "results"
+    TEST_DIR = SCRIPT_DIR / "1/test_set/test_set/dogs"
+    OUTPUT_DIR = SCRIPT_DIR / "dogs_results_dinov3_heatmaps"
     OUTPUT_DIR.mkdir(exist_ok=True)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
 
     # --- Step 1: Load DINOv3 Model ---
-    print("\n[1/5] Loading DINOv3 ViT-S/16 model...")
+    print("\n[1/6] Loading DINOv3 ViT-S/16 model...")
     model = load_dinov3_model(args.weights, device)
     n_params = sum(p.numel() for p in model.parameters()) / 1e6
     print(f"  Model: DINOv3 ViT-S/16 (patch_size={PATCH_SIZE}, embed_dim={model.embed_dim})")
@@ -282,7 +283,7 @@ def main():
     print(f"  Features: RoPE positional encoding, {model.n_storage_tokens} storage tokens")
 
     # --- Step 2: Select Prototypes ---
-    print("\n[2/5] Selecting prototype images...")
+    print("\n[2/6] Selecting prototype images...")
     cat_images = sorted(
         [str(CAT_DIR / f) for f in os.listdir(CAT_DIR) if f.lower().endswith((".jpg", ".jpeg", ".png"))]
     )
@@ -297,7 +298,7 @@ def main():
     print(f"  Dog prototypes: {len(dog_prototypes)} (from {len(dog_images)} total)")
 
     # --- Step 3: Extract Features ---
-    print("\n[3/5] Extracting patch features for prototypes...")
+    print("\n[3/6] Extracting patch features for prototypes...")
     print("  Processing cat prototypes...")
     cat_features = extract_all_patch_features(model, cat_prototypes, args.batch_size, device)
     print(f"    Cat features shape: {cat_features.shape}")
@@ -307,7 +308,7 @@ def main():
     print(f"    Dog features shape: {dog_features.shape}")
 
     # --- Step 4: Compute Prototype Centers ---
-    print("\n[4/5] Computing prototype centers...")
+    print("\n[4/6] Computing prototype centers...")
     cat_center = compute_prototype_center(cat_features)
     dog_center = compute_prototype_center(dog_features)
 
@@ -317,8 +318,41 @@ def main():
     print(f"  Cosine similarity between cat/dog centers: {cosine_sim:.4f}")
     print(f"  (Lower = better separation, 1.0 = identical)")
 
-    # --- Step 5: Generate Heatmaps ---
-    print("\n[5/5] Generating heatmaps for test images...")
+    # --- Step 5: PCA Visualization ---
+    print("\n[5/6] PCA visualization of prototype features...")
+
+    # Average patch features per image -> image-level representation
+    cat_img_feats = cat_features.mean(dim=1).numpy()  # (100, embed_dim)
+    dog_img_feats = dog_features.mean(dim=1).numpy()  # (100, embed_dim)
+
+    all_feats = np.concatenate([cat_img_feats, dog_img_feats], axis=0)
+    labels = np.array([0] * len(cat_img_feats) + [1] * len(dog_img_feats))
+
+    pca = PCA(n_components=2)
+    feats_2d = pca.fit_transform(all_feats)
+
+    fig, ax = plt.subplots(figsize=(10, 8))
+    cat_mask = labels == 0
+    dog_mask = labels == 1
+    ax.scatter(feats_2d[cat_mask, 0], feats_2d[cat_mask, 1],
+               c="#0066FF", label="Cat", alpha=0.7, edgecolors="white", s=60)
+    ax.scatter(feats_2d[dog_mask, 0], feats_2d[dog_mask, 1],
+               c="#FF3300", label="Dog", alpha=0.7, edgecolors="white", s=60)
+    ax.set_xlabel(f"PC1 ({pca.explained_variance_ratio_[0]*100:.1f}%)", fontsize=12)
+    ax.set_ylabel(f"PC2 ({pca.explained_variance_ratio_[1]*100:.1f}%)", fontsize=12)
+    ax.set_title("DINOv3 Prototype Feature Distribution (PCA 2D)", fontsize=14, fontweight="bold")
+    ax.legend(fontsize=12)
+    ax.grid(True, alpha=0.3)
+    plt.tight_layout()
+
+    pca_path = str(OUTPUT_DIR / "pca_prototype_distribution.png")
+    plt.savefig(pca_path, dpi=150, bbox_inches="tight")
+    plt.close()
+    print(f"  Saved PCA plot: {pca_path}")
+    print(f"  Explained variance: PC1={pca.explained_variance_ratio_[0]*100:.1f}%, PC2={pca.explained_variance_ratio_[1]*100:.1f}%")
+
+    # --- Step 6: Generate Heatmaps ---
+    print("\n[6/6] Generating heatmaps for test images...")
     test_images = sorted(
         [str(TEST_DIR / f) for f in os.listdir(TEST_DIR) if f.lower().endswith((".jpg", ".jpeg", ".png"))]
     )

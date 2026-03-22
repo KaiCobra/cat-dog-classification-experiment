@@ -4,3 +4,9 @@ data/test/
 __pycache__/
 *.pyc
 /tmp/
+*.pth
+*.png
+dinov3_weights
+outputs_dinov3
+1
+wget-log
